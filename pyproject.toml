@@ -21,6 +21,10 @@ dependencies = [
 testpaths = ["tests"]
 pythonpath = ["."]
 
+[tool.setuptools.packages.find]
+include = ["apps*", "services*"]
+exclude = ["data*", "db*", "docs*", "node_modules*", "packages*", "tests*"]
+
 [tool.ruff]
 line-length = 100
 extend-exclude = [".agents/skills/nuwa-skill", "node_modules", ".next"]

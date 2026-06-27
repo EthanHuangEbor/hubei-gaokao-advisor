@@ -11,11 +11,17 @@
     "build:web": "npm --workspace apps/web run build",
     "lint:web": "npm --workspace apps/web run lint",
     "test:e2e": "npm --workspace apps/web run test:e2e",
-    "api": "uvicorn apps.api.app.main:app --host 0.0.0.0 --port 8000 --reload",
-    "fixtures": "python scripts/generate_fixtures.py",
-    "test:py": "pytest",
-    "lint:py": "ruff check .",
-    "typecheck:py": "mypy services apps/api tests"
+    "api": "node scripts/python-runner.mjs -m uvicorn apps.api.app.main:app --host 0.0.0.0 --port 8000 --reload",
+    "fixtures": "node scripts/python-runner.mjs scripts/generate_fixtures.py",
+    "data:hubei:download": "node scripts/python-runner.mjs -m services.data.hubei.build_dataset --download",
+    "data:hubei:parse": "node scripts/python-runner.mjs -m services.data.hubei.build_dataset --parse",
+    "data:hubei:quality": "node scripts/python-runner.mjs -m services.data.hubei.build_dataset --quality",
+    "data:hubei:promote": "node scripts/python-runner.mjs -m services.data.hubei.build_dataset --promote",
+    "data:hubei:build": "node scripts/python-runner.mjs -m services.data.hubei.build_dataset --download --parse --quality --promote",
+    "db:seed:hubei": "node scripts/python-runner.mjs -m services.data.hubei.seed_db --curated-dir data/curated/hubei",
+    "test:py": "node scripts/python-runner.mjs -m pytest",
+    "lint:py": "node scripts/python-runner.mjs -m ruff check .",
+    "typecheck:py": "node scripts/python-runner.mjs -m mypy services apps/api tests"
   },
   "overrides": {
     "postcss": "8.5.10"

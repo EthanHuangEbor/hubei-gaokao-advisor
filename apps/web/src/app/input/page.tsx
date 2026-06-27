@@ -1,16 +1,24 @@
 "use client";
 
-import { Send, ShieldCheck } from "lucide-react";
+import { AlertTriangle, CheckCircle2, GraduationCap, Send, ShieldCheck, SlidersHorizontal } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { FormEvent, useState } from "react";
-import type { RecommendationRequest } from "@hubei-gaokao-advisor/shared-types";
-import { runRecommendation } from "@/lib/api";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+
+import type { RecommendationRequest, RankSegment } from "@hubei-gaokao-advisor/shared-types";
+
+import { fetchRankSegments, runRecommendation } from "@/lib/api";
 
 const secondOptions = [
   ["chemistry", "化学"],
   ["biology", "生物"],
   ["politics", "政治"],
   ["geography", "地理"],
+] as const;
+
+const steps = [
+  { title: "考试信息", icon: GraduationCap },
+  { title: "偏好权重", icon: SlidersHorizontal },
+  { title: "限制条件", icon: ShieldCheck },
 ];
 
 export default function InputPage() {
@@ -19,8 +27,43 @@ export default function InputPage() {
   const [error, setError] = useState("");
   const [secondSubjects, setSecondSubjects] = useState<string[]>(["chemistry", "biology"]);
   const [firstSubject, setFirstSubject] = useState<"physics" | "history">("physics");
+  const [score, setScore] = useState(610);
+  const [rank, setRank] = useState(26000);
   const [acceptPrivate, setAcceptPrivate] = useState(true);
   const [acceptSino, setAcceptSino] = useState(true);
+  const [rankSegments, setRankSegments] = useState<RankSegment[]>([]);
+
+  useEffect(() => {
+    fetchRankSegments()
+      .then(setRankSegments)
+      .catch(() => setRankSegments([]));
+  }, []);
+
+  const rankWarning = useMemo(() => {
+    const segment = rankSegments.find(
+      (item) => item.year === 2026 && item.first_subject === firstSubject && item.score === score,
+    );
+    if (!segment) {
+      return "";
+    }
+    if (rank < segment.rank_start || rank > segment.rank_end) {
+      return `2026 一分一段中，${score} 分对应约 ${segment.rank_start}-${segment.rank_end} 位；当前位次 ${rank} 需要复核。`;
+    }
+    return "";
+  }, [firstSubject, rank, rankSegments, score]);
+
+  function handleFirstSubject(value: "physics" | "history") {
+    setFirstSubject(value);
+    if (value === "physics") {
+      setScore(610);
+      setRank(26000);
+      setSecondSubjects((current) => (current.includes("chemistry") ? current : ["chemistry", ...current]));
+    } else {
+      setScore(585);
+      setRank(18000);
+      setSecondSubjects((current) => current.filter((item) => item !== "chemistry"));
+    }
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -34,8 +77,8 @@ export default function InputPage() {
       category: "普通类",
       first_subject: firstSubject,
       second_subjects: secondSubjects,
-      score: Number(data.get("score") || 600),
-      rank: Number(data.get("rank") || 26000),
+      score,
+      rank,
       preferred_cities: splitList(String(data.get("preferred_cities") || "")),
       avoid_cities: splitList(String(data.get("avoid_cities") || "")),
       preferred_majors: splitList(String(data.get("preferred_majors") || "")),
@@ -57,76 +100,93 @@ export default function InputPage() {
   }
 
   return (
-    <div className="grid cols-2">
-      <section>
-        <h1>输入考生信息</h1>
-        <p className="lead">
-          这里只需要成绩、位次、选科和偏好；不会收集姓名、身份证、准考证号、手机号或报名号。
-        </p>
-        <div className="notice">
+    <div className="grid">
+      <section className="input-header">
+        <div>
+          <h1>输入考生信息</h1>
+          <p className="lead">这里只处理成绩、位次、选科和偏好；不会收集姓名、身份证、准考证号、手机号或报名号。</p>
+        </div>
+        <div className="notice compact">
           <ShieldCheck size={18} /> 个人身份信息不会进入 MiniMax 调用或本地推荐记录。
         </div>
       </section>
-      <form className="card form" onSubmit={submit}>
-        <div className="grid cols-2">
-          <div className="field">
-            <label>首选科目</label>
-            <select value={firstSubject} onChange={(event) => setFirstSubject(event.target.value as "physics" | "history")}>
-              <option value="physics">物理</option>
-              <option value="history">历史</option>
-            </select>
+
+      <div className="step-flow">
+        {steps.map(({ title, icon: Icon }, index) => (
+          <div className="step-pill" key={title}>
+            <Icon size={16} /> {index + 1}. {title}
+          </div>
+        ))}
+      </div>
+
+      <form className="form" onSubmit={submit}>
+        <section className="card form-section">
+          <h2>1. 考试信息</h2>
+          <div className="grid cols-3">
+            <div className="field">
+              <label>首选科目</label>
+              <select value={firstSubject} onChange={(event) => handleFirstSubject(event.target.value as "physics" | "history")}>
+                <option value="physics">物理</option>
+                <option value="history">历史</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>成绩</label>
+              <input name="score" type="number" value={score} min={0} max={750} onChange={(event) => setScore(Number(event.target.value || 0))} />
+            </div>
+            <div className="field">
+              <label>位次</label>
+              <input name="rank" type="number" value={rank} min={1} onChange={(event) => setRank(Number(event.target.value || 1))} />
+            </div>
           </div>
           <div className="field">
-            <label>位次</label>
-            <input name="rank" type="number" defaultValue={firstSubject === "physics" ? 26000 : 18000} min={1} />
+            <label>再选科目</label>
+            <div className="check-row">
+              {secondOptions.map(([value, label]) => (
+                <label key={value}>
+                  <input
+                    type="checkbox"
+                    checked={secondSubjects.includes(value)}
+                    onChange={(event) =>
+                      setSecondSubjects((current) =>
+                        event.target.checked ? [...current, value] : current.filter((item) => item !== value),
+                      )
+                    }
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
           </div>
-          <div className="field">
-            <label>成绩</label>
-            <input name="score" type="number" defaultValue={firstSubject === "physics" ? 610 : 585} min={0} max={750} />
+          {rankWarning ? (
+            <p className="notice compact">
+              <AlertTriangle size={18} /> {rankWarning}
+            </p>
+          ) : (
+            <p className="muted inline-status"><CheckCircle2 size={16} /> 成绩与位次未触发 2026 一分一段异常提醒。</p>
+          )}
+        </section>
+
+        <section className="card form-section">
+          <h2>2. 偏好权重</h2>
+          <div className="grid cols-2">
+            <div className="field">
+              <label>偏好城市</label>
+              <input name="preferred_cities" placeholder="武汉, 宜昌" />
+            </div>
+            <div className="field">
+              <label>回避城市</label>
+              <input name="avoid_cities" placeholder="可留空" />
+            </div>
+            <div className="field">
+              <label>偏好专业</label>
+              <input name="preferred_majors" placeholder="计算机, 法学" />
+            </div>
+            <div className="field">
+              <label>回避专业</label>
+              <input name="avoid_majors" placeholder="土木" />
+            </div>
           </div>
-          <div className="field">
-            <label>最高学费</label>
-            <input name="max_tuition" type="number" defaultValue={60000} min={0} />
-          </div>
-        </div>
-        <div className="field">
-          <label>再选科目</label>
-          <div className="check-row">
-            {secondOptions.map(([value, label]) => (
-              <label key={value}>
-                <input
-                  type="checkbox"
-                  checked={secondSubjects.includes(value)}
-                  onChange={(event) =>
-                    setSecondSubjects((current) =>
-                      event.target.checked ? [...current, value] : current.filter((item) => item !== value),
-                    )
-                  }
-                />
-                {label}
-              </label>
-            ))}
-          </div>
-        </div>
-        <div className="grid cols-2">
-          <div className="field">
-            <label>偏好城市</label>
-            <input name="preferred_cities" placeholder="武汉,宜昌" />
-          </div>
-          <div className="field">
-            <label>回避城市</label>
-            <input name="avoid_cities" placeholder="可留空" />
-          </div>
-          <div className="field">
-            <label>偏好专业</label>
-            <input name="preferred_majors" placeholder="计算机,法学" />
-          </div>
-          <div className="field">
-            <label>回避专业</label>
-            <input name="avoid_majors" placeholder="土木" />
-          </div>
-        </div>
-        <div className="grid cols-2">
           <div className="field">
             <label>优先策略</label>
             <select name="priority_strategy" defaultValue="balanced">
@@ -137,25 +197,35 @@ export default function InputPage() {
               <option value="employment_first">就业优先</option>
             </select>
           </div>
-          <div className="field">
-            <label>录取规则偏好</label>
-            <div className="check-row">
-              <label>
-                <input type="checkbox" defaultChecked name="accept_adjustment" /> 接受调剂
-              </label>
-              <label>
-                <input type="checkbox" checked={acceptPrivate} onChange={(event) => setAcceptPrivate(event.target.checked)} /> 接受民办
-              </label>
-              <label>
-                <input type="checkbox" checked={acceptSino} onChange={(event) => setAcceptSino(event.target.checked)} /> 接受中外合作
-              </label>
+        </section>
+
+        <section className="card form-section">
+          <h2>3. 限制条件</h2>
+          <div className="grid cols-2">
+            <div className="field">
+              <label>最高学费</label>
+              <input name="max_tuition" type="number" defaultValue={60000} min={0} />
+            </div>
+            <div className="field">
+              <label>录取规则偏好</label>
+              <div className="check-row">
+                <label>
+                  <input type="checkbox" defaultChecked name="accept_adjustment" /> 接受调剂
+                </label>
+                <label>
+                  <input type="checkbox" checked={acceptPrivate} onChange={(event) => setAcceptPrivate(event.target.checked)} /> 接受民办
+                </label>
+                <label>
+                  <input type="checkbox" checked={acceptSino} onChange={(event) => setAcceptSino(event.target.checked)} /> 接受中外合作
+                </label>
+              </div>
             </div>
           </div>
-        </div>
-        {error ? <p className="notice">{error}</p> : null}
-        <button className="btn primary" disabled={loading} type="submit">
-          {loading ? "生成中" : "生成推荐"} <Send size={18} />
-        </button>
+          {error ? <p className="notice compact">{error}</p> : null}
+          <button className="btn primary" disabled={loading} type="submit">
+            {loading ? "生成中" : "生成推荐"} <Send size={18} />
+          </button>
+        </section>
       </form>
     </div>
   );
@@ -163,8 +233,7 @@ export default function InputPage() {
 
 function splitList(value: string): string[] {
   return value
-    .split(/[,\s，、]+/)
+    .split(/[,，、\s]+/)
     .map((item) => item.trim())
     .filter(Boolean);
 }
-

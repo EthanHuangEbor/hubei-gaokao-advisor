@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from collections import defaultdict
 from math import sqrt
@@ -16,6 +16,8 @@ from services.recommender.models import (
     SameRankReference,
     median_int,
 )
+
+MISSING_PLAN_MAJOR = "待导入招生计划"
 
 
 def clamp(value: float, lower: float, upper: float) -> float:
@@ -57,6 +59,10 @@ class HubeiAdmissionRiskModel:
         same_rank_references: list[SameRankReference] | None = None,
     ) -> list[RecommendationItem]:
         same_rank_references = same_rank_references or []
+        if not admission_plans:
+            return self._recommend_from_history_only(
+                candidate, admission_records, same_rank_references
+            )
         history_by_group: dict[tuple[str, str], list[AdmissionRecord]] = defaultdict(list)
         for record in admission_records:
             if record.year in {2023, 2024, 2025}:
@@ -167,6 +173,15 @@ class HubeiAdmissionRiskModel:
                     reasons=reasons,
                     warnings=warnings,
                     source_links=sorted({record.source_url for record in history} | {primary_plan.source_url}),
+                    historical_min_rank_median=rank_median,
+                    years_available=len(history),
+                    plan_abs_change=seat_abs_change,
+                    city_match_score=self._city_match_score(candidate, primary_plan),
+                    major_match_score=self._major_match_score(candidate, majors_by_group[key]),
+                    employment_preference_score=self._employment_preference_score(candidate),
+                    restriction_risk_score=restriction_penalty,
+                    main_reasons=reasons,
+                    main_warnings=warnings,
                 )
             )
         return sorted(items, key=lambda item: (self._tier_order(item.tier), -item.adjusted_probability))
@@ -232,7 +247,106 @@ class HubeiAdmissionRiskModel:
             reasons=["2026 新增或缺少历史投档线，按低置信冲档处理"],
             warnings=["新增专业组无近三年投档线，必须人工核对高校招生章程"],
             source_links=[primary_plan.source_url],
+            plan_status="ready",
+            years_available=0,
+            plan_abs_change=current_plan_seats,
+            city_match_score=self._city_match_score(candidate, primary_plan),
+            major_match_score=self._major_match_score(candidate, majors),
+            employment_preference_score=self._employment_preference_score(candidate),
+            restriction_risk_score=0.0,
+            main_reasons=["2026 新增或缺少历史投档线，按低置信冲档处理"],
+            main_warnings=["新增专业组无近三年投档线，必须人工核对高校招生章程"],
         )
+
+    def _recommend_from_history_only(
+        self,
+        candidate: CandidateProfile,
+        admission_records: list[AdmissionRecord],
+        same_rank_references: list[SameRankReference],
+    ) -> list[RecommendationItem]:
+        history_by_group: dict[tuple[str, str], list[AdmissionRecord]] = defaultdict(list)
+        for record in admission_records:
+            if record.year not in {2023, 2024, 2025}:
+                continue
+            if record.province != candidate.province:
+                continue
+            if record.batch != candidate.batch or record.category != candidate.category:
+                continue
+            if record.first_subject != candidate.first_subject:
+                continue
+            if record.confidence_score < self.data_confidence_threshold:
+                continue
+            if not requirement_satisfied(record.second_subject_requirement, candidate.second_subjects):
+                continue
+            history_by_group[(record.university_code, record.major_group_code)].append(record)
+
+        items: list[RecommendationItem] = []
+        for key, history in history_by_group.items():
+            representative = max(history, key=lambda record: record.year)
+            min_rank_3y = {record.year: record.min_rank for record in history}
+            min_score_3y = {record.year: record.min_score for record in history}
+            historical_ranks = list(min_rank_3y.values())
+            rank_median = median_int(historical_ranks)
+            rank_gap = candidate.rank - rank_median
+            rank_gap_ratio = rank_gap / max(candidate.rank, 1)
+            volatility = population_std(historical_ranks) / max(
+                sum(historical_ranks) / len(historical_ranks), 1
+            )
+            data_confidence = min(record.confidence_score for record in history)
+            probability = base_probability_from_gap(rank_gap_ratio)
+            probability -= clamp(volatility, 0.0, 0.35) * 0.25
+            probability *= clamp(data_confidence, 0.0, 1.0)
+            adjusted = clamp(probability, 0.05, 0.90)
+            if adjusted < 0.12:
+                continue
+            tier = tier_for_probability(adjusted)
+            refs = self._references_for_group(same_rank_references, key)
+            reasons = [
+                f"近三年最低位次中位数约为 {rank_median}，考生位次差为 {rank_gap}",
+                "2026 招生计划未导入，已关闭计划变化评分",
+                f"近三年位次波动系数 {volatility:.2f}",
+            ]
+            warnings = ["缺少 2026 招生计划，专业、计划数、学费和限制信息需人工导入后复核"]
+            items.append(
+                RecommendationItem(
+                    university_code=representative.university_code,
+                    university_name=representative.university_name,
+                    major_group_code=representative.major_group_code,
+                    major_group_name=representative.major_group_name,
+                    included_majors=[MISSING_PLAN_MAJOR],
+                    current_plan_seats=0,
+                    last_year_plan_seats=0,
+                    plan_change_ratio=None,
+                    seat_abs_change=0,
+                    min_rank_3y=min_rank_3y,
+                    min_score_3y=min_score_3y,
+                    rank_gap=rank_gap,
+                    rank_gap_ratio=rank_gap_ratio,
+                    volatility_score=volatility,
+                    adjusted_probability=adjusted,
+                    estimated_probability_band=probability_band_label(tier),
+                    tier=tier,
+                    risk_level=self._risk_level(tier, volatility, 0.0),
+                    group_change_flag="unknown",
+                    subject_requirement_change_flag="unknown",
+                    same_rank_hit_count=len(refs),
+                    same_rank_reference_confidence=self._reference_confidence(refs),
+                    preference_match_score=0.0,
+                    restriction_penalty=0.0,
+                    data_confidence_score=data_confidence,
+                    reasons=reasons,
+                    warnings=warnings,
+                    source_links=sorted({record.source_url for record in history}),
+                    plan_status="missing_current_plan",
+                    historical_min_rank_median=rank_median,
+                    years_available=len(history),
+                    plan_abs_change=None,
+                    restriction_risk_score=0.0,
+                    main_reasons=reasons,
+                    main_warnings=warnings,
+                )
+            )
+        return sorted(items, key=lambda item: (self._tier_order(item.tier), -item.adjusted_probability))
 
     def _preference_match_score(
         self, candidate: CandidateProfile, plan: AdmissionPlan, majors: list[str]
@@ -255,6 +369,30 @@ class HubeiAdmissionRiskModel:
         if strategy == "employment_first":
             score += 0.1
         return clamp(score, -1.0, 1.0)
+
+    def _city_match_score(self, candidate: CandidateProfile, plan: AdmissionPlan) -> float:
+        preferred_cities = set(candidate.preferences.get("preferred_cities", []) or [])
+        avoid_cities = set(candidate.preferences.get("avoid_cities", []) or [])
+        score = 0.0
+        if plan.campus in preferred_cities:
+            score += 0.4
+        if plan.campus in avoid_cities:
+            score -= 0.6
+        return clamp(score, -1.0, 1.0)
+
+    def _major_match_score(self, candidate: CandidateProfile, majors: list[str]) -> float:
+        preferred_majors = set(candidate.preferences.get("preferred_majors", []) or [])
+        avoid_majors = set(candidate.preferences.get("avoid_majors", []) or [])
+        joined = " ".join(majors)
+        score = 0.0
+        if any(item and item in joined for item in preferred_majors):
+            score += 0.5
+        if any(item and item in joined for item in avoid_majors):
+            score -= 0.8
+        return clamp(score, -1.0, 1.0)
+
+    def _employment_preference_score(self, candidate: CandidateProfile) -> float:
+        return 0.1 if candidate.preferences.get("priority_strategy") == "employment_first" else 0.0
 
     def _restriction_penalty(self, plan: AdmissionPlan) -> tuple[float, list[str]]:
         penalty = 0.0

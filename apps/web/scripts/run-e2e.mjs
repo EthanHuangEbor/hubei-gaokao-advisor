@@ -1,4 +1,4 @@
-﻿import { spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -9,6 +9,8 @@ const bundledPython = "C:/Users/Ethan/.cache/codex-runtimes/codex-primary-runtim
 const python = process.env.E2E_PYTHON ?? (isWindows && existsSync(bundledPython) ? bundledPython : "python");
 const children = [];
 let logs = "";
+let apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
+let webBase = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3000";
 
 function resetE2eState() {
   rmSync(path.join(repoRoot, ".tmp", "jobs"), { recursive: true, force: true });
@@ -23,10 +25,27 @@ async function probe(url) {
   }
 }
 
-function start(name, command, cwd) {
+async function isExpectedApi(baseUrl) {
+  try {
+    const response = await fetch(`${baseUrl}/openapi.json`);
+    if (!response.ok) return false;
+    const payload = await response.json();
+    return payload?.info?.title === "Hubei Gaokao Advisor";
+  } catch {
+    return false;
+  }
+}
+
+function start(name, command, cwd, extraEnv = {}) {
   const child = spawn(command, {
     cwd,
-    env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" },
+    env: {
+      ...process.env,
+      NEXT_TELEMETRY_DISABLED: "1",
+      NEXT_PUBLIC_API_BASE_URL: apiBase,
+      PLAYWRIGHT_BASE_URL: webBase,
+      ...extraEnv,
+    },
     stdio: ["ignore", "pipe", "pipe"],
     shell: true,
   });
@@ -52,24 +71,46 @@ async function waitFor(url, name) {
   throw new Error(`${name} did not become ready. Logs:\n${logs}`);
 }
 
+async function firstFreePort(startPort) {
+  for (let port = startPort; port < startPort + 20; port += 1) {
+    if (!(await probe(`http://127.0.0.1:${port}/health`)) && !(await probe(`http://127.0.0.1:${port}/input`))) {
+      return port;
+    }
+  }
+  throw new Error(`No free local port found from ${startPort}`);
+}
+
 async function ensureApi() {
-  if (await probe("http://127.0.0.1:8000/health")) return;
+  if (await isExpectedApi(apiBase)) return;
+  const preferredPort = Number(new URL(apiBase).port || "8000");
+  const port = await firstFreePort(preferredPort === 8000 ? 8010 : preferredPort);
+  apiBase = `http://127.0.0.1:${port}`;
   const quotedPython = isWindows ? `"${python}"` : python;
-  start("api", `${quotedPython} -m uvicorn apps.api.app.main:app --host 127.0.0.1 --port 8000`, repoRoot);
-  await waitFor("http://127.0.0.1:8000/health", "API");
+  start("api", `${quotedPython} -m uvicorn apps.api.app.main:app --host 127.0.0.1 --port ${port}`, repoRoot);
+  await waitFor(`${apiBase}/health`, "API");
+  if (!(await isExpectedApi(apiBase))) {
+    throw new Error(`API on ${apiBase} is not Hubei Gaokao Advisor. Logs:\n${logs}`);
+  }
 }
 
 async function ensureWeb() {
-  if (await probe("http://127.0.0.1:3000/input")) return;
-  start("web", "npx next dev -H 127.0.0.1", process.cwd());
-  await waitFor("http://127.0.0.1:3000/input", "Web");
+  const requestedPort = Number(new URL(webBase).port || "3000");
+  const port = (await probe(`${webBase}/input`)) ? await firstFreePort(requestedPort + 1) : requestedPort;
+  webBase = `http://127.0.0.1:${port}`;
+  start("web", `npx next dev -H 127.0.0.1 -p ${port}`, process.cwd());
+  await waitFor(`${webBase}/input`, "Web");
 }
 
 function runPlaywright() {
   return new Promise((resolve) => {
     const child = spawn("npx playwright test --reporter=line", {
       cwd: process.cwd(),
-      env: { ...process.env, PLAYWRIGHT_EXTERNAL_SERVER: "1" },
+      env: {
+        ...process.env,
+        PLAYWRIGHT_EXTERNAL_SERVER: "1",
+        PLAYWRIGHT_BASE_URL: webBase,
+        NEXT_PUBLIC_API_BASE_URL: apiBase,
+      },
       stdio: "inherit",
       shell: true,
     });

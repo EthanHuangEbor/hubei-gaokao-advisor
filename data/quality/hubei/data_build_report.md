@@ -1,0 +1,7 @@
+# Hubei v0.2 Data Build Report
+
+- admission_records: 324
+- rank_segments: 116
+- admission_plans: 108
+- policy: OCR candidates remain pending; only approved curated rows are runtime eligible.
+- parser_version: curated-fixture-seed-v0.2

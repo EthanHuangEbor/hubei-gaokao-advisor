@@ -41,6 +41,8 @@ class VolunteerPlanBuilder:
             selected.extend(fill[: target_total - len(selected)])
 
         selected = selected[:target_total]
+        for position, item in enumerate(selected, start=1):
+            item.position = position
         counts = Counter(item.tier for item in selected)
         strategy_note = "按湖北本科普通批院校专业组口径生成志愿草表。"
         if shortage:

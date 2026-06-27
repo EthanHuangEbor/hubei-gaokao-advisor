@@ -117,7 +117,7 @@ class RecommendationItem:
     included_majors: list[str]
     current_plan_seats: int
     last_year_plan_seats: int
-    plan_change_ratio: float
+    plan_change_ratio: float | None
     seat_abs_change: int
     min_rank_3y: dict[int, int]
     min_score_3y: dict[int, int]
@@ -139,9 +139,22 @@ class RecommendationItem:
     warnings: list[str]
     source_links: list[str]
     doctor_peak_explanation: str = ""
+    position: int = 0
+    plan_status: str = "ready"
+    historical_min_rank_median: int | None = None
+    years_available: int = 0
+    plan_abs_change: int | None = None
+    city_match_score: float = 0.0
+    major_match_score: float = 0.0
+    employment_preference_score: float = 0.0
+    restriction_risk_score: float = 0.0
+    main_reasons: list[str] = field(default_factory=list)
+    main_warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "position": self.position,
+            "plan_status": self.plan_status,
             "university_code": self.university_code,
             "university_name": self.university_name,
             "major_group_code": self.major_group_code,
@@ -149,8 +162,15 @@ class RecommendationItem:
             "included_majors": self.included_majors,
             "current_plan_seats": self.current_plan_seats,
             "last_year_plan_seats": self.last_year_plan_seats,
-            "plan_change_ratio": round(self.plan_change_ratio, 4),
+            "plan_change_ratio": None
+            if self.plan_change_ratio is None
+            else round(self.plan_change_ratio, 4),
             "seat_abs_change": self.seat_abs_change,
+            "historical_min_rank_median": self.historical_min_rank_median,
+            "years_available": self.years_available,
+            "plan_abs_change": self.plan_abs_change
+            if self.plan_abs_change is not None
+            else self.seat_abs_change,
             "min_rank_2023": self.min_rank_3y.get(2023),
             "min_rank_2024": self.min_rank_3y.get(2024),
             "min_rank_2025": self.min_rank_3y.get(2025),
@@ -168,10 +188,16 @@ class RecommendationItem:
             "same_rank_hit_count": self.same_rank_hit_count,
             "same_rank_reference_confidence": round(self.same_rank_reference_confidence, 4),
             "preference_match_score": round(self.preference_match_score, 4),
+            "city_match_score": round(self.city_match_score, 4),
+            "major_match_score": round(self.major_match_score, 4),
+            "employment_preference_score": round(self.employment_preference_score, 4),
             "restriction_penalty": round(self.restriction_penalty, 4),
+            "restriction_risk_score": round(self.restriction_risk_score, 4),
             "data_confidence_score": round(self.data_confidence_score, 4),
             "reasons": self.reasons,
             "warnings": self.warnings,
+            "main_reasons": self.main_reasons or self.reasons,
+            "main_warnings": self.main_warnings or self.warnings,
             "source_links": self.source_links,
             "doctor_peak_explanation": self.doctor_peak_explanation,
         }

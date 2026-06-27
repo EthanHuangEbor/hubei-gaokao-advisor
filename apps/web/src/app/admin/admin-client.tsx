@@ -1,12 +1,14 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useState } from "react";
 
 import {
   createParseJob,
+  fetchMiniMaxLogs,
   fetchParseJobs,
   fetchRawDocuments,
   runDataQuality,
+  runHubeiDataStage,
   uploadHubeiPlan,
   type ParseJob,
   type QualityFinding,
@@ -28,13 +30,16 @@ export function AdminClient() {
   const [documents, setDocuments] = useState<RawDocument[]>([]);
   const [jobs, setJobs] = useState<ParseJob[]>([]);
   const [findings, setFindings] = useState<QualityFinding[]>([]);
+  const [miniMaxLogCount, setMiniMaxLogCount] = useState(0);
   const [uploadStatus, setUploadStatus] = useState("");
   const [jobStatus, setJobStatus] = useState("");
   const [qualityStatus, setQualityStatus] = useState("");
+  const [dataStageStatus, setDataStageStatus] = useState("");
   const [error, setError] = useState("");
   const [isUploading, setIsUploading] = useState(false);
   const [isQueueing, setIsQueueing] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
+  const [runningStage, setRunningStage] = useState<string | null>(null);
 
   useEffect(() => {
     fetchRawDocuments()
@@ -43,6 +48,9 @@ export function AdminClient() {
     fetchParseJobs()
       .then(setJobs)
       .catch(() => setJobs([]));
+    fetchMiniMaxLogs()
+      .then((logs) => setMiniMaxLogCount(logs.length))
+      .catch(() => setMiniMaxLogCount(0));
   }, []);
 
   async function handleUpload() {
@@ -94,6 +102,20 @@ export function AdminClient() {
     }
   }
 
+  async function handleDataStage(stage: "download" | "parse" | "quality" | "promote" | "seed") {
+    setError("");
+    setDataStageStatus("");
+    setRunningStage(stage);
+    try {
+      const result = await runHubeiDataStage(stage);
+      setDataStageStatus(`${stage} 完成 · ${result.status}`);
+    } catch (stageError) {
+      setError(stageError instanceof Error ? stageError.message : `${stage} 失败`);
+    } finally {
+      setRunningStage(null);
+    }
+  }
+
   return (
     <section className="card">
       <h2>2026 招生计划上传与质量检查</h2>
@@ -119,9 +141,23 @@ export function AdminClient() {
             {isChecking ? "检查中" : "运行数据质量检查"}
           </button>
         </div>
+        <div className="actions data-stage-actions">
+          {(["download", "parse", "quality", "promote", "seed"] as const).map((stage) => (
+            <button
+              className="btn secondary"
+              disabled={runningStage !== null}
+              key={stage}
+              type="button"
+              onClick={() => handleDataStage(stage)}
+            >
+              {runningStage === stage ? "运行中" : stage}
+            </button>
+          ))}
+        </div>
         {uploadStatus ? <p className="muted">{uploadStatus}</p> : null}
         {jobStatus ? <p className="muted">{jobStatus}</p> : null}
         {qualityStatus ? <p className="muted">{qualityStatus}</p> : null}
+        {dataStageStatus ? <p className="muted">{dataStageStatus}</p> : null}
         {error ? <p className="notice">{error}</p> : null}
       </div>
 
@@ -179,6 +215,7 @@ export function AdminClient() {
               )}
             </tbody>
           </table>
+          <p className="muted">MiniMax 日志 {miniMaxLogCount} 条；Doctor.Peak 仅解释，不改变排序。</p>
         </div>
       </div>
 
