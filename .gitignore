@@ -1,6 +1,7 @@
 .env
 .venv/
 __pycache__/
+*.egg-info/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -11,8 +12,32 @@ build/
 coverage/
 data/raw/*
 !data/raw/.gitkeep
+!data/raw/hubei/
+data/raw/hubei/*
+!data/raw/hubei/admission_lines/
+!data/raw/hubei/rank_segments/
+!data/raw/hubei/plans/
+data/raw/hubei/admission_lines/*
+data/raw/hubei/rank_segments/*
+data/raw/hubei/plans/*
+!data/raw/hubei/admission_lines/.gitkeep
+!data/raw/hubei/rank_segments/.gitkeep
+!data/raw/hubei/plans/.gitkeep
 data/normalized/*
 !data/normalized/.gitkeep
+data/candidate/*
+!data/candidate/.gitkeep
+!data/candidate/hubei/
+data/candidate/hubei/*
+!data/candidate/hubei/admission_lines/
+!data/candidate/hubei/rank_segments/
+!data/candidate/hubei/plans/
+data/candidate/hubei/admission_lines/*
+data/candidate/hubei/rank_segments/*
+data/candidate/hubei/plans/*
+!data/candidate/hubei/admission_lines/.gitkeep
+!data/candidate/hubei/rank_segments/.gitkeep
+!data/candidate/hubei/plans/.gitkeep
 
 
 .tmp/
