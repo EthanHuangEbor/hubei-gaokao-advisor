@@ -1,0 +1,2 @@
+"""Hubei official source adapters."""
+

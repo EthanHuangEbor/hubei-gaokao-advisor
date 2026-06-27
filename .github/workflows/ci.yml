@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest ruff mypy fastapi httpx python-multipart
+      - name: Generate fixtures
+        run: python scripts/generate_fixtures.py
+      - name: Ruff
+        run: ruff check .
+      - name: Mypy
+        run: mypy services apps/api tests
+      - name: Pytest
+        run: pytest
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install Node dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm --workspace apps/web run typecheck
+      - name: Lint
+        run: npm --workspace apps/web run lint
+      - name: Build
+        run: npm --workspace apps/web run build
+      - name: Install Playwright Chromium
+        run: npm --workspace apps/web exec playwright install chromium --with-deps
+      - name: E2E
+        run: npm --workspace apps/web run test:e2e

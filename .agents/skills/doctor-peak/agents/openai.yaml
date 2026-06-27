@@ -1,0 +1,5 @@
+interface:
+  display_name: "Doctor.Peak"
+  short_description: "湖北高考志愿就业导向解释顾问"
+  default_prompt: "Use $doctor-peak to explain a Hubei gaokao volunteer recommendation in JSON."
+
