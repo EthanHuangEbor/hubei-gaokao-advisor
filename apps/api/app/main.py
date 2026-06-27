@@ -1,10 +1,12 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import csv
+import io
 from pathlib import Path
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from apps.api.app.jobs import ParseJobStore
@@ -13,7 +15,11 @@ from apps.api.app.repository import Repository
 from apps.api.app.schemas import ParseJobRequest, RecommendationRequest, ReviewRequest
 from services.crawler.adapters.hubei.hubei_admission_line_adapter import HubeiAdmissionLineAdapter
 from services.crawler.adapters.hubei.hubei_plan_adapter import HubeiPlanAdapter
+from services.crawler.adapters.static_csv_adapter import FixtureDataset
 from services.crawler.quality.hubei_quality_checks import run_quality_checks
+from services.data.hubei.build_dataset import build_dataset
+from services.data.hubei.seed_db import seed_db
+from services.data.hubei.source_registry import load_source_registry
 from services.llm.advice_orchestrator import AdviceOrchestrator
 from services.recommender.admission_risk_model import HubeiAdmissionRiskModel
 from services.recommender.models import CandidateProfile, RecommendationRun
@@ -31,6 +37,7 @@ reference_builder = SameRankReferenceBuilder()
 plan_builder = VolunteerPlanBuilder()
 advice = AdviceOrchestrator()
 RUNS: dict[str, RecommendationRun] = {}
+TRACES: dict[str, dict[str, object]] = {}
 LLM_LOGS: list[dict[str, object]] = []
 
 app = FastAPI(title="Hubei Gaokao Advisor", version="0.1.0")
@@ -50,12 +57,66 @@ def health() -> dict[str, str]:
 
 @app.get("/api/hubei/sources")
 def hubei_sources() -> list[dict[str, object]]:
-    return repo.sources()
+    registry = load_source_registry(ROOT / "data" / "source_registry" / "hubei_sources.yaml")
+    return [source.__dict__ for source in registry.sources]
 
+
+
+@app.get("/api/data/status")
+def data_status() -> dict[str, object]:
+    curated_dir = ROOT / "data" / "curated" / "hubei"
+    quality_report = ROOT / "data" / "quality" / "hubei" / "data_build_report.md"
+    curated_files = {
+        "admission_records": curated_dir / "admission_records_2023_2025.csv",
+        "rank_segments": curated_dir / "rank_segments_2023_2026.csv",
+        "admission_plans": curated_dir / "admission_plans_2026.csv",
+    }
+    return {
+        "runtime_source": "curated_csv" if all(path.exists() for path in curated_files.values()) else "fixtures",
+        "curated_ready": all(path.exists() for path in curated_files.values()),
+        "quality_report_ready": quality_report.exists(),
+        "counts": {
+            "admission_records": len(repo.dataset.admission_records),
+            "rank_segments": len(repo.dataset.rank_segments),
+            "admission_plans": len(repo.dataset.admission_plans),
+        },
+        "curated_files": {name: str(path) for name, path in curated_files.items()},
+        "policy": "OCR candidate rows require manual approval before curated promotion.",
+    }
+
+
+@app.post("/api/hubei/data/download")
+def hubei_data_download() -> dict[str, object]:
+    return _run_hubei_data_build(download=True)
+
+
+@app.post("/api/hubei/data/parse")
+def hubei_data_parse() -> dict[str, object]:
+    return _run_hubei_data_build(parse=True)
+
+
+@app.post("/api/hubei/data/quality")
+def hubei_data_quality() -> dict[str, object]:
+    return _run_hubei_data_build(quality=True)
+
+
+@app.post("/api/hubei/data/promote")
+def hubei_data_promote() -> dict[str, object]:
+    return _run_hubei_data_build(parse=True, quality=True, promote=True)
+
+
+@app.post("/api/hubei/data/seed")
+def hubei_data_seed() -> dict[str, object]:
+    return seed_db(curated_dir=ROOT / "data" / "curated" / "hubei")
+
+
+@app.get("/api/hubei/ocr-review-queue")
+def hubei_ocr_review_queue() -> dict[str, object]:
+    return {"items": [], "policy": "OCR candidates default to pending and never enter recommendations."}
 
 @app.post("/api/hubei/sources/discover")
 def discover_sources() -> dict[str, object]:
-    return {"sources": repo.sources(), "note": "MVP uses audited seed registry; live crawling is disabled."}
+    return {"sources": hubei_sources(), "note": "v0.2 uses the audited source registry; live crawling is disabled."}
 
 
 @app.post("/api/hubei/parse-jobs")
@@ -138,6 +199,7 @@ def run_recommendations(request: RecommendationRequest) -> dict[str, object]:
     advice_result = advice.explain(run)
     LLM_LOGS.append(advice_result.__dict__)
     RUNS[run.run_id] = run
+    TRACES[run.run_id] = _build_trace(candidate, repo.dataset, run)
     return run.to_dict()
 
 
@@ -148,6 +210,59 @@ def recommendation(run_id: str) -> dict[str, object]:
         raise HTTPException(status_code=404, detail="recommendation run not found")
     return run.to_dict()
 
+
+
+@app.get("/api/recommendations/{run_id}/trace")
+def recommendation_trace(run_id: str) -> dict[str, object]:
+    trace = TRACES.get(run_id)
+    if not trace:
+        raise HTTPException(status_code=404, detail="recommendation trace not found")
+    return trace
+
+
+@app.get("/api/recommendations/{run_id}/export.csv")
+def recommendation_export_csv(run_id: str) -> Response:
+    run = RUNS.get(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="recommendation run not found")
+    output = io.StringIO()
+    fieldnames = [
+        "position",
+        "tier",
+        "university_code",
+        "university_name",
+        "major_group_code",
+        "major_group_name",
+        "plan_status",
+        "current_plan_seats",
+        "last_year_plan_seats",
+        "plan_change_ratio",
+        "historical_min_rank_median",
+        "years_available",
+        "rank_gap",
+        "risk_level",
+        "estimated_probability_band",
+        "main_reasons",
+        "main_warnings",
+        "source_links",
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for item in run.items:
+        payload = item.to_dict()
+        writer.writerow(
+            {
+                key: "; ".join(str(value) for value in payload[key])
+                if isinstance(payload.get(key), list)
+                else payload.get(key, "")
+                for key in fieldnames
+            }
+        )
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename=recommendation-{run_id}.csv"},
+    )
 
 @app.get("/api/recommendations/{run_id}/volunteer-plan")
 def volunteer_plan(run_id: str) -> dict[str, object]:
@@ -282,3 +397,109 @@ def doctor_peak_skill() -> dict[str, str]:
 @app.get("/api/admin/minimax-logs")
 def minimax_logs() -> list[dict[str, object]]:
     return LLM_LOGS
+
+
+def _run_hubei_data_build(
+    *,
+    download: bool = False,
+    parse: bool = False,
+    quality: bool = False,
+    promote: bool = False,
+) -> dict[str, object]:
+    result = build_dataset(
+        root=ROOT,
+        download=download,
+        parse=parse,
+        quality=quality,
+        promote=promote,
+    )
+    return {"status": "ok", **result.to_dict()}
+
+
+def _build_trace(
+    candidate: CandidateProfile,
+    dataset: FixtureDataset,
+    run: RecommendationRun,
+) -> dict[str, object]:
+    plan_groups = {
+        (plan.university_code, plan.major_group_code)
+        for plan in dataset.admission_plans
+        if plan.province == candidate.province and plan.batch == candidate.batch
+    }
+    history_groups = {
+        (record.university_code, record.major_group_code)
+        for record in dataset.admission_records
+        if record.province == candidate.province and record.batch == candidate.batch
+    }
+    if plan_groups:
+        subject_groups = {
+            (plan.university_code, plan.major_group_code)
+            for plan in dataset.admission_plans
+            if plan.province == candidate.province
+            and plan.batch == candidate.batch
+            and plan.first_subject == candidate.first_subject
+        }
+    else:
+        subject_groups = {
+            (record.university_code, record.major_group_code)
+            for record in dataset.admission_records
+            if record.province == candidate.province
+            and record.batch == candidate.batch
+            and record.first_subject == candidate.first_subject
+        }
+    rank_segments = [
+        segment
+        for segment in dataset.rank_segments
+        if segment.year == candidate.year
+        and segment.province == candidate.province
+        and segment.first_subject == candidate.first_subject
+    ]
+    exact_score_segments = [segment for segment in rank_segments if segment.score == candidate.score]
+    rank_in_score_band = any(
+        segment.rank_start <= candidate.rank <= segment.rank_end for segment in exact_score_segments
+    )
+    warnings = []
+    if not dataset.admission_plans:
+        warnings.append("missing_current_plan: 2026 admission plans are not loaded")
+    if exact_score_segments and not rank_in_score_band:
+        warnings.append("score_rank_mismatch: rank is outside the 2026 score band")
+    return {
+        "input_normalized": {
+            "year": candidate.year,
+            "province": candidate.province,
+            "first_subject": candidate.first_subject,
+            "second_subjects": list(candidate.second_subjects),
+            "score": candidate.score,
+            "rank": candidate.rank,
+            "batch": candidate.batch,
+            "category": candidate.category,
+        },
+        "score_rank_validation": {
+            "segments_available": bool(rank_segments),
+            "exact_score_found": bool(exact_score_segments),
+            "rank_in_score_band": rank_in_score_band,
+        },
+        "pool_counts": {
+            "raw_pool": len(plan_groups or history_groups),
+            "after_subject_filter": len(subject_groups),
+            "final_plan": len(run.items),
+        },
+        "tier_counts": run.tier_counts,
+        "data_quality": {
+            "plan_status": "ready" if dataset.admission_plans else "missing_current_plan",
+            "admission_records": len(dataset.admission_records),
+            "rank_segments": len(dataset.rank_segments),
+            "admission_plans": len(dataset.admission_plans),
+        },
+        "warnings": warnings,
+        "final_plan": [
+            {
+                "position": item.position,
+                "tier": item.tier,
+                "university_code": item.university_code,
+                "major_group_code": item.major_group_code,
+                "plan_status": item.plan_status,
+            }
+            for item in run.items
+        ],
+    }
