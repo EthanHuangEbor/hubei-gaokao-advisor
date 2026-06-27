@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import Link from "next/link";
 import { useState } from "react";
@@ -103,7 +103,7 @@ export function CompareClient() {
                       </tr>
                       <tr>
                         <th>风险/计划变化</th>
-                        <td>{first.risk_level} / {Math.round(first.plan_change_ratio * 100)}%</td>
+                        <td>{first.risk_level} / {first.plan_change_ratio === null ? "计划缺失" : `${Math.round(first.plan_change_ratio * 100)}%`}</td>
                       </tr>
                       <tr>
                         <th>推荐口径</th>

@@ -1,4 +1,10 @@
-﻿import type { RecommendationRequest, RecommendationRun } from "@hubei-gaokao-advisor/shared-types";
+import type {
+  DataStatus,
+  RankSegment,
+  RecommendationRequest,
+  RecommendationRun,
+  RecommendationTrace,
+} from "@hubei-gaokao-advisor/shared-types";
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
@@ -49,6 +55,30 @@ export interface QualityFinding {
   message: string;
 }
 
+export interface HubeiSource {
+  source_id: string;
+  title?: string;
+  source_name?: string;
+  source_url: string;
+  source_type: string;
+  data_type?: string;
+  status?: string;
+  review_status?: string;
+  license_note?: string;
+}
+
+export interface HubeiDataBuildResult {
+  status: string;
+  curated_records?: number;
+  curated_rank_segments?: number;
+  curated_plans?: number;
+  curated_dir?: string;
+  quality_dir?: string;
+  admission_records?: number;
+  rank_segments?: number;
+  admission_plans?: number;
+}
+
 export async function runRecommendation(payload: RecommendationRequest): Promise<RecommendationRun> {
   const response = await fetch(`${API_BASE}/api/recommendations/run`, {
     method: "POST",
@@ -65,6 +95,42 @@ export async function fetchRun(runId: string): Promise<RecommendationRun> {
   const response = await fetch(`${API_BASE}/api/recommendations/${runId}`, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`run not found: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function fetchRecommendationTrace(runId: string): Promise<RecommendationTrace> {
+  const response = await fetch(`${API_BASE}/api/recommendations/${runId}/trace`, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`trace not found: ${response.status}`);
+  }
+  return response.json();
+}
+
+export function recommendationExportUrl(runId: string): string {
+  return `${API_BASE}/api/recommendations/${runId}/export.csv`;
+}
+
+export async function fetchDataStatus(): Promise<DataStatus> {
+  const response = await fetch(`${API_BASE}/api/data/status`, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`data status failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function fetchHubeiSources(): Promise<HubeiSource[]> {
+  const response = await fetch(`${API_BASE}/api/hubei/sources`, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`sources failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function fetchRankSegments(): Promise<RankSegment[]> {
+  const response = await fetch(`${API_BASE}/api/hubei/rank-segments`, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`rank segments failed: ${response.status}`);
   }
   return response.json();
 }
@@ -114,6 +180,24 @@ export async function runDataQuality(): Promise<{ findings: QualityFinding[] }> 
   const response = await fetch(`${API_BASE}/api/hubei/data-quality/run`, { method: "POST" });
   if (!response.ok) {
     throw new Error(`data quality failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function runHubeiDataStage(
+  stage: "download" | "parse" | "quality" | "promote" | "seed",
+): Promise<HubeiDataBuildResult> {
+  const response = await fetch(`${API_BASE}/api/hubei/data/${stage}`, { method: "POST" });
+  if (!response.ok) {
+    throw new Error(`hubei data ${stage} failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function fetchMiniMaxLogs(): Promise<Array<Record<string, unknown>>> {
+  const response = await fetch(`${API_BASE}/api/admin/minimax-logs`, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`minimax logs failed: ${response.status}`);
   }
   return response.json();
 }
