@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import os
 from pathlib import Path
 from typing import Annotated
 from uuid import uuid4
@@ -39,11 +40,24 @@ advice = AdviceOrchestrator()
 RUNS: dict[str, RecommendationRun] = {}
 TRACES: dict[str, dict[str, object]] = {}
 LLM_LOGS: list[dict[str, object]] = []
-
+CORS_ALLOW_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ALLOW_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001",
+    ).split(",")
+    if origin.strip()
+]
+CORS_ALLOW_ORIGIN_REGEX = (
+    r"^http://(localhost|127\.0\.0\.1):\d+$"
+    if os.getenv("APP_ENV", "development") != "production"
+    else None
+)
 app = FastAPI(title="Hubei Gaokao Advisor", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=CORS_ALLOW_ORIGINS,
+    allow_origin_regex=CORS_ALLOW_ORIGIN_REGEX,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -150,3 +150,18 @@ def test_missing_current_plan_mode_uses_historical_data(monkeypatch: pytest.Monk
     assert {item["plan_status"] for item in payload["items"]} == {"missing_current_plan"}
     assert all(item["plan_change_ratio"] is None for item in payload["items"])
     assert all(item["included_majors"] == ["待导入招生计划"] for item in payload["items"])
+
+
+def test_local_dev_cors_allows_web_port_3001() -> None:
+    client = TestClient(app)
+
+    response = client.options(
+        "/api/recommendations/run",
+        headers={
+            "Origin": "http://127.0.0.1:3001",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:3001"
