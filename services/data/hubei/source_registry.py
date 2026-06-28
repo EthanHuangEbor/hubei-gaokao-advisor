@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +15,10 @@ class HubeiSource:
     years: str
     status: str
     license_note: str
+    parser: str = ""
+    raw_subdir: str = ""
+    allow_network_download: bool = False
+    requires_manual_review: bool = True
 
 
 @dataclass(frozen=True)
@@ -31,8 +35,8 @@ def load_source_registry(path: str | Path) -> HubeiSourceRegistry:
         raise FileNotFoundError(registry_path)
 
     version = 1
-    raw_sources: list[dict[str, str]] = []
-    current: dict[str, str] | None = None
+    raw_sources: list[dict[str, str | bool]] = []
+    current: dict[str, str | bool] | None = None
 
     for raw_line in registry_path.read_text(encoding="utf-8").splitlines():
         stripped = raw_line.strip()
@@ -71,19 +75,30 @@ def load_source_registry(path: str | Path) -> HubeiSourceRegistry:
         missing = sorted(required - raw_source.keys())
         if missing:
             raise ValueError(f"source #{index} missing fields: {', '.join(missing)}")
-        sources.append(HubeiSource(**{key: raw_source[key] for key in required}))
+        values = {
+            "parser": "",
+            "raw_subdir": str(raw_source.get("data_type", "")),
+            "allow_network_download": False,
+            "requires_manual_review": True,
+            **raw_source,
+        }
+        sources.append(HubeiSource(**values))  # type: ignore[arg-type]
     return HubeiSourceRegistry(version=version, sources=sources)
 
 
-def _split_key_value(text: str) -> tuple[str, str]:
+def _split_key_value(text: str) -> tuple[str, str | bool]:
     key, value = text.split(":", 1)
     return key.strip(), _parse_value(value)
 
 
-def _parse_value(value: str) -> str:
+def _parse_value(value: str) -> str | bool:
     parsed = value.strip()
     if (parsed.startswith('"') and parsed.endswith('"')) or (
         parsed.startswith("'") and parsed.endswith("'")
     ):
         return parsed[1:-1]
+    if parsed.lower() == "true":
+        return True
+    if parsed.lower() == "false":
+        return False
     return parsed
