@@ -94,6 +94,72 @@ export interface DoctorPeakAdvice {
   [key: string]: unknown;
 }
 
+export type DatasetKind = "missing" | "fixture_seed" | "real_curated" | "mixed" | "incomplete";
+
+export interface DataRuntimeStatus {
+  dataset_kind: DatasetKind;
+  curated_ready: boolean;
+  real_curated_ready: boolean;
+  contains_fixture_rows: boolean;
+  fixture_marker_count: number;
+  approved_row_count: number;
+  pending_row_count: number;
+  missing_files: string[];
+  warnings: string[];
+  curated_dir?: string;
+  required_files?: Record<string, boolean>;
+  approved_rows?: Record<string, number>;
+  fixture_markers?: string[];
+  strict_real_data_required?: boolean;
+  fixture_data_allowed?: boolean;
+}
+
+export type DataAuthenticity = DataRuntimeStatus;
+
+export interface LlmStatus {
+  request_id?: string | null;
+  model?: string | null;
+  endpoint_style?: string | null;
+  latency_ms?: number | null;
+  error_code?: string | null;
+  error_message?: string | null;
+  fallback_reason?: string | null;
+}
+
+export interface DoctorPeakStatus {
+  doctor_peak: {
+    status: "available" | "missing" | string;
+    path: string;
+    policy: string;
+  };
+  minimax: {
+    configured: boolean;
+    base_url: string;
+    model: string;
+    endpoint_style: string;
+    timeout_seconds: number;
+    masked_api_key: string;
+    error_code: string | null;
+    error_message?: string | null;
+  };
+  latest_call: {
+    request_id?: string | null;
+    error_code?: string | null;
+    error_message?: string | null;
+    latency_ms?: number | null;
+    endpoint_style?: string | null;
+  };
+}
+
+export interface DoctorPeakProbeResult {
+  status: "ok" | "fallback" | string;
+  error_code?: string | null;
+  error_message?: string | null;
+  request_id?: string | null;
+  output?: DoctorPeakAdvice;
+  minimax?: DoctorPeakStatus["minimax"];
+}
+
 export interface RecommendationRun {
   run_id: string;
   strategy_note: string;
@@ -101,11 +167,15 @@ export interface RecommendationRun {
   items: RecommendationItem[];
   disclaimer: string;
   doctor_peak_advice?: DoctorPeakAdvice;
+  data_status?: DataRuntimeStatus;
+  llm_status?: LlmStatus;
 }
 
 export interface DataStatus {
   runtime_source: string;
   curated_ready: boolean;
+  real_curated_ready: boolean;
+  data_authenticity: DataAuthenticity;
   quality_report_ready: boolean;
   counts: {
     admission_records: number;
@@ -134,6 +204,7 @@ export interface RecommendationTrace {
   pool_counts: Record<string, number>;
   tier_counts: Record<string, number>;
   data_quality: Record<string, unknown>;
+  data_authenticity?: DataAuthenticity;
   warnings: string[];
   final_plan: Array<{
     position: number;

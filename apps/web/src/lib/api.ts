@@ -1,5 +1,7 @@
 import type {
   DataStatus,
+  DoctorPeakProbeResult,
+  DoctorPeakStatus,
   RankSegment,
   RecommendationRequest,
   RecommendationRun,
@@ -115,6 +117,22 @@ export async function fetchDataStatus(): Promise<DataStatus> {
   const response = await fetch(`${API_BASE}/api/data/status`, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`data status failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function fetchDoctorPeakStatus(): Promise<DoctorPeakStatus> {
+  const response = await fetch(`${API_BASE}/api/admin/doctor-peak/status`, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`doctor peak status failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function runDoctorPeakProbe(): Promise<DoctorPeakProbeResult> {
+  const response = await fetch(`${API_BASE}/api/admin/doctor-peak/test`, { method: "POST" });
+  if (!response.ok) {
+    throw new Error(`doctor peak probe failed: ${response.status}`);
   }
   return response.json();
 }

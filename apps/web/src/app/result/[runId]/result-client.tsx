@@ -45,6 +45,18 @@ function nonEmptyStrings(values: unknown) {
   return Array.isArray(values) ? values.filter((value): value is string => typeof value === "string" && value.trim().length > 0) : [];
 }
 
+const DATA_KIND_LABEL: Record<string, string> = {
+  real_curated: "真实",
+  fixture_seed: "样例",
+  mixed: "混合",
+  missing: "缺失",
+  incomplete: "不完整",
+};
+
+function dataKindLabel(kind?: string) {
+  return kind ? DATA_KIND_LABEL[kind] ?? kind : "未知";
+}
+
 export function ResultClient({ run, dataStatus, trace, exportUrl }: ResultClientProps) {
   const [tierFilter, setTierFilter] = useState<"all" | Tier>("all");
   const advice = run.doctor_peak_advice;
@@ -58,6 +70,12 @@ export function ResultClient({ run, dataStatus, trace, exportUrl }: ResultClient
   }
   const risks = nonEmptyStrings(advice?.risks);
   const nextChecks = nonEmptyStrings(advice?.next_checks);
+  const runtimeStatus = (run.data_status?.dataset_kind ? run.data_status : dataStatus?.data_authenticity ?? trace?.data_authenticity) ?? null;
+  const runtimeSource = run.data_status?.dataset_kind ? "本次运行" : dataStatus?.data_authenticity ? "当前服务" : trace?.data_authenticity ? "追踪" : "未知";
+  const realCuratedReady = Boolean(runtimeStatus?.real_curated_ready);
+  const strictRejecting = Boolean(runtimeStatus?.strict_real_data_required && !realCuratedReady);
+  const llmStatus = run.llm_status;
+  const llmFallbackReason = llmStatus?.fallback_reason ?? llmStatus?.error_code ?? null;
 
   return (
     <div className="grid">
@@ -80,13 +98,31 @@ export function ResultClient({ run, dataStatus, trace, exportUrl }: ResultClient
         ))}
         <div className="summary-cell wide">
           <span className="muted">数据</span>
-          <strong>{String(dataStatus?.runtime_source ?? trace?.data_quality?.plan_status ?? "unknown")}</strong>
+          <strong>{runtimeStatus ? dataKindLabel(runtimeStatus.dataset_kind) : String(dataStatus?.runtime_source ?? trace?.data_quality?.plan_status ?? "unknown")}</strong>
         </div>
         <div className="summary-cell wide">
           <span className="muted">候选池</span>
           <strong>{trace?.pool_counts?.final_plan ?? run.items.length}/{trace?.pool_counts?.after_subject_filter ?? "-"}</strong>
         </div>
       </section>
+
+      {runtimeStatus && !realCuratedReady ? (
+        <div role="alert" className="notice compact">
+          <AlertTriangle size={18} /> {runtimeSource}数据不是真实 curated（{dataKindLabel(runtimeStatus.dataset_kind)}），不能作为真实填报依据。
+        </div>
+      ) : null}
+      {strictRejecting ? (
+        <div role="alert" className="notice compact">
+          <AlertTriangle size={18} /> 严格真实数据已开启，未就绪数据会被后端拒绝。
+        </div>
+      ) : null}
+      {llmStatus ? (
+        <div className="notice compact">
+          {llmFallbackReason ? <AlertTriangle size={18} /> : <Info size={18} />}
+          Doctor.Peak：{llmFallbackReason ? `本地 fallback（${llmFallbackReason}）` : `解释服务状态正常 · ${llmStatus.model ?? "-"}`}
+          {typeof llmStatus.latency_ms === "number" ? ` · ${llmStatus.latency_ms}ms` : ""}
+        </div>
+      ) : null}
 
       {warnings.size ? (
         <div className="notice compact">

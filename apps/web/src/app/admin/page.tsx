@@ -2,11 +2,27 @@ import { fetchDataStatus, fetchHubeiSources } from "@/lib/api";
 
 import { AdminClient } from "./admin-client";
 
+const DATA_KIND_LABEL: Record<string, string> = {
+  real_curated: "真实",
+  fixture_seed: "样例",
+  mixed: "混合",
+  missing: "缺失",
+  incomplete: "不完整",
+};
+
+function dataKindLabel(kind?: string) {
+  return kind ? DATA_KIND_LABEL[kind] ?? kind : "未知";
+}
 export default async function AdminPage() {
   const [sources, dataStatus] = await Promise.all([
     fetchHubeiSources().catch(() => []),
     fetchDataStatus().catch(() => null),
   ]);
+  const authenticity = dataStatus?.data_authenticity;
+  const requiredFiles = authenticity?.required_files;
+  const requiredFileTotal = requiredFiles ? Object.keys(requiredFiles).length : Object.keys(dataStatus?.curated_files ?? {}).length;
+  const requiredFileReady = requiredFiles ? Object.values(requiredFiles).filter(Boolean).length : dataStatus?.curated_ready ? requiredFileTotal : 0;
+  const strictRejecting = Boolean(authenticity?.strict_real_data_required && !dataStatus?.real_curated_ready);
   return (
     <div className="grid">
       <section className="result-header">
@@ -23,8 +39,20 @@ export default async function AdminPage() {
           <strong>{dataStatus?.runtime_source ?? "unknown"}</strong>
         </div>
         <div className="summary-cell wide">
-          <span className="muted">Curated</span>
-          <strong>{dataStatus?.curated_ready ? "ready" : "fixture fallback"}</strong>
+          <span className="muted">数据类型</span>
+          <strong>{dataKindLabel(authenticity?.dataset_kind)}</strong>
+        </div>
+        <div className="summary-cell wide">
+          <span className="muted">真实 curated</span>
+          <strong>{dataStatus?.real_curated_ready ? "已就绪" : "未就绪"}</strong>
+        </div>
+        <div className="summary-cell wide">
+          <span className="muted">严格保护</span>
+          <strong>{strictRejecting ? "会拒绝" : authenticity?.strict_real_data_required ? "开启" : "关闭"}</strong>
+        </div>
+        <div className="summary-cell wide">
+          <span className="muted">Curated 文件</span>
+          <strong>{requiredFileReady}/{requiredFileTotal || "-"}</strong>
         </div>
         <div className="summary-cell wide">
           <span className="muted">投档线</span>
@@ -39,7 +67,6 @@ export default async function AdminPage() {
           <strong>{dataStatus?.counts.admission_plans ?? "-"}</strong>
         </div>
       </section>
-
       <div className="grid cols-3">
         {[
           "source registry",
@@ -59,7 +86,7 @@ export default async function AdminPage() {
         ))}
       </div>
 
-      <AdminClient />
+      <AdminClient initialDataStatus={dataStatus} />
 
       <section className="card table-card">
         <h2>Source registry</h2>

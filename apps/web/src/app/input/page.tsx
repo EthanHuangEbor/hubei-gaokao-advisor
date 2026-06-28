@@ -4,9 +4,9 @@ import { AlertTriangle, CheckCircle2, GraduationCap, Send, ShieldCheck, SlidersH
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
-import type { RecommendationRequest, RankSegment } from "@hubei-gaokao-advisor/shared-types";
+import type { DataStatus, RecommendationRequest, RankSegment } from "@hubei-gaokao-advisor/shared-types";
 
-import { fetchRankSegments, runRecommendation } from "@/lib/api";
+import { fetchDataStatus, fetchRankSegments, runRecommendation } from "@/lib/api";
 
 const secondOptions = [
   ["chemistry", "化学"],
@@ -21,6 +21,18 @@ const steps = [
   { title: "限制条件", icon: ShieldCheck },
 ];
 
+const DATA_KIND_LABEL: Record<string, string> = {
+  real_curated: "真实",
+  fixture_seed: "样例",
+  mixed: "混合",
+  missing: "缺失",
+  incomplete: "不完整",
+};
+
+function dataKindLabel(kind?: string) {
+  return kind ? DATA_KIND_LABEL[kind] ?? kind : "未知";
+}
+
 export default function InputPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -32,11 +44,15 @@ export default function InputPage() {
   const [acceptPrivate, setAcceptPrivate] = useState(true);
   const [acceptSino, setAcceptSino] = useState(true);
   const [rankSegments, setRankSegments] = useState<RankSegment[]>([]);
+  const [dataStatus, setDataStatus] = useState<DataStatus | null>(null);
 
   useEffect(() => {
     fetchRankSegments()
       .then(setRankSegments)
       .catch(() => setRankSegments([]));
+    fetchDataStatus()
+      .then(setDataStatus)
+      .catch(() => setDataStatus(null));
   }, []);
 
   const rankWarning = useMemo(() => {
@@ -51,6 +67,9 @@ export default function InputPage() {
     }
     return "";
   }, [firstSubject, rank, rankSegments, score]);
+  const authenticity = dataStatus?.data_authenticity;
+  const realCuratedReady = Boolean(dataStatus?.real_curated_ready ?? authenticity?.real_curated_ready);
+  const strictRejecting = Boolean(authenticity?.strict_real_data_required && !realCuratedReady);
 
   function handleFirstSubject(value: "physics" | "history") {
     setFirstSubject(value);
@@ -118,6 +137,17 @@ export default function InputPage() {
           </div>
         ))}
       </div>
+
+      {!realCuratedReady && authenticity ? (
+        <div role="alert" className="notice compact">
+          <AlertTriangle size={18} /> 当前数据不是真实 curated（{dataKindLabel(authenticity.dataset_kind)}），不能作为真实填报依据。请先在后台完成官方数据入库。
+        </div>
+      ) : null}
+      {strictRejecting ? (
+        <div role="alert" className="notice compact">
+          <AlertTriangle size={18} /> 严格真实数据已开启，当前生成会被后端拒绝。
+        </div>
+      ) : null}
 
       <form className="form" onSubmit={submit}>
         <section className="card form-section">
