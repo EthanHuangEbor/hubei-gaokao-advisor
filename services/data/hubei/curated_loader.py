@@ -6,6 +6,11 @@ from pathlib import Path
 from typing import Literal, cast
 
 from services.crawler.adapters.static_csv_adapter import FixtureDataset
+from services.data.hubei.authenticity import (
+    FIXTURE_MARKERS,
+    inspect_curated_dir,
+    strict_real_data_required,
+)
 from services.recommender.models import AdmissionPlan, AdmissionRecord, RankSegment, bool_from_text
 
 FirstSubjectValue = Literal["physics", "history"]
@@ -13,10 +18,15 @@ FirstSubjectValue = Literal["physics", "history"]
 
 def load_curated_dataset(curated_dir: str | Path) -> FixtureDataset:
     curated_path = Path(curated_dir)
+    authenticity = inspect_curated_dir(curated_path)
+    strict_required = os.environ.get("APP_ENV") == "production" or strict_real_data_required()
+    if strict_required and authenticity.contains_fixture_rows:
+        raise ValueError("fixture curated data is not allowed in production mode")
+
     records = _load_admission_records(curated_path / "admission_records_2023_2025.csv")
     plans = _load_admission_plans(curated_path / "admission_plans_2026.csv")
     rank_segments = _load_rank_segments(curated_path / "rank_segments_2023_2026.csv")
-    if os.environ.get("APP_ENV") == "production":
+    if strict_required:
         _reject_fixture_rows(records, plans)
     return FixtureDataset(
         admission_records=records,
@@ -117,13 +127,13 @@ def _read_dicts(path: Path) -> list[dict[str, str]]:
 
 
 def _reject_fixture_rows(records: list[AdmissionRecord], plans: list[AdmissionPlan]) -> None:
-    fixture_markers = ("fixture", "样例")
+    fixture_markers = FIXTURE_MARKERS
     rows: list[AdmissionRecord | AdmissionPlan] = [*records, *plans]
     for row in rows:
         haystack = " ".join(
             [row.source_id, row.source_url, row.university_name, row.major_group_name]
         ).lower()
-        if any(marker in haystack for marker in fixture_markers):
+        if any(marker.lower() in haystack for marker in fixture_markers):
             raise ValueError("fixture curated data is not allowed in production mode")
 
 

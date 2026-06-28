@@ -24,13 +24,81 @@ class MiniMaxResult:
     error_code: str | None
 
 
+@dataclass(frozen=True)
+class MiniMaxConfig:
+    api_key: str
+    base_url: str
+    model: str
+    endpoint_style: str
+    timeout_seconds: int
+
+    @classmethod
+    def from_env(cls) -> MiniMaxConfig:
+        timeout_raw = os.getenv("MINIMAX_TIMEOUT_SECONDS", "30")
+        try:
+            timeout_seconds = int(timeout_raw)
+        except ValueError:
+            timeout_seconds = 30
+        return cls(
+            api_key=os.getenv("MINIMAX_API_KEY", "").strip(),
+            base_url=os.getenv("MINIMAX_BASE_URL", "https://api.minimax.io/v1").rstrip("/"),
+            model=os.getenv("MINIMAX_MODEL", "MiniMax-M3").strip() or "MiniMax-M3",
+            endpoint_style=os.getenv("MINIMAX_API_STYLE", "responses").strip() or "responses",
+            timeout_seconds=max(timeout_seconds, 1),
+        )
+
+    def masked_api_key(self) -> str:
+        if not self.api_key:
+            return ""
+        if len(self.api_key) <= 4:
+            return "***"
+        if len(self.api_key) <= 8:
+            return f"{self.api_key[:1]}***{self.api_key[-1:]}"
+        return f"{self.api_key[:4]}***{self.api_key[-4:]}"
+
+
+@dataclass(frozen=True)
+class MiniMaxStatus:
+    configured: bool
+    base_url: str
+    model: str
+    endpoint_style: str
+    timeout_seconds: int
+    masked_api_key: str
+    error_code: str | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "configured": self.configured,
+            "base_url": self.base_url,
+            "model": self.model,
+            "endpoint_style": self.endpoint_style,
+            "timeout_seconds": self.timeout_seconds,
+            "masked_api_key": self.masked_api_key,
+            "error_code": self.error_code,
+        }
+
+
 class MiniMaxClient:
-    def __init__(self) -> None:
-        self.api_key = os.getenv("MINIMAX_API_KEY", "")
-        self.base_url = os.getenv("MINIMAX_BASE_URL", "https://api.minimax.io/v1").rstrip("/")
-        self.model = os.getenv("MINIMAX_MODEL", "MiniMax-M3")
-        self.api_style = os.getenv("MINIMAX_API_STYLE", "responses")
-        self.timeout_seconds = int(os.getenv("MINIMAX_TIMEOUT_SECONDS", "30"))
+    def __init__(self, config: MiniMaxConfig | None = None) -> None:
+        self.config = config or MiniMaxConfig.from_env()
+        self.api_key = self.config.api_key
+        self.base_url = self.config.base_url
+        self.model = self.config.model
+        self.api_style = self.config.endpoint_style
+        self.timeout_seconds = self.config.timeout_seconds
+
+    def status(self) -> dict[str, Any]:
+        error_code = None if self.config.api_key else "missing_api_key"
+        return MiniMaxStatus(
+            configured=bool(self.config.api_key),
+            base_url=self.config.base_url,
+            model=self.config.model,
+            endpoint_style=self.config.endpoint_style,
+            timeout_seconds=self.config.timeout_seconds,
+            masked_api_key=self.config.masked_api_key(),
+            error_code=error_code,
+        ).to_dict()
 
     def generate_advice(self, payload: dict[str, Any]) -> MiniMaxResult:
         request_id = str(uuid4())
@@ -63,13 +131,21 @@ class MiniMaxClient:
                 error_code=None,
             )
         except Exception as exc:
+            error_code = self._error_code(exc)
             return self._result(
                 request_id=request_id,
                 started=started,
                 input_hash=input_hash,
-                output=self._fallback(sanitized, type(exc).__name__),
-                error_code=type(exc).__name__,
+                output=self._fallback(sanitized, error_code),
+                error_code=error_code,
             )
+
+    def _error_code(self, exc: Exception) -> str:
+        if isinstance(exc, RuntimeError) and exc.args:
+            message = str(exc.args[0])
+            if message.startswith("minimax_"):
+                return message
+        return type(exc).__name__
 
     def _sanitize_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         text = json.dumps(payload, ensure_ascii=False)

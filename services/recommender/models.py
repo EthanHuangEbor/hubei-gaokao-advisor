@@ -212,6 +212,8 @@ class RecommendationRun:
     tier_counts: dict[str, int]
     disclaimer: str
     doctor_peak_advice: dict[str, Any] = field(default_factory=dict)
+    data_status: dict[str, Any] = field(default_factory=dict)
+    llm_status: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -232,6 +234,8 @@ class RecommendationRun:
             "items": [item.to_dict() for item in self.items],
             "disclaimer": self.disclaimer,
             "doctor_peak_advice": self.doctor_peak_advice,
+            "data_status": self.data_status,
+            "llm_status": self.llm_status,
         }
 
 

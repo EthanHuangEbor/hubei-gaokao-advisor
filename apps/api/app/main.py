@@ -18,10 +18,12 @@ from services.crawler.adapters.hubei.hubei_admission_line_adapter import HubeiAd
 from services.crawler.adapters.hubei.hubei_plan_adapter import HubeiPlanAdapter
 from services.crawler.adapters.static_csv_adapter import FixtureDataset
 from services.crawler.quality.hubei_quality_checks import run_quality_checks
+from services.data.hubei.authenticity import require_runtime_dataset
 from services.data.hubei.build_dataset import build_dataset
 from services.data.hubei.seed_db import seed_db
 from services.data.hubei.source_registry import load_source_registry
 from services.llm.advice_orchestrator import AdviceOrchestrator
+from services.llm.minimax_client import MiniMaxClient
 from services.recommender.admission_risk_model import HubeiAdmissionRiskModel
 from services.recommender.models import CandidateProfile, RecommendationRun
 from services.recommender.same_rank_reference_builder import SameRankReferenceBuilder
@@ -85,9 +87,12 @@ def data_status() -> dict[str, object]:
         "rank_segments": curated_dir / "rank_segments_2023_2026.csv",
         "admission_plans": curated_dir / "admission_plans_2026.csv",
     }
+    authenticity = repo.dataset_status.to_dict()
     return {
-        "runtime_source": "curated_csv" if all(path.exists() for path in curated_files.values()) else "fixtures",
-        "curated_ready": all(path.exists() for path in curated_files.values()),
+        "runtime_source": "curated_csv" if repo.dataset_status.curated_ready else "fixtures",
+        "curated_ready": repo.dataset_status.curated_ready,
+        "real_curated_ready": repo.dataset_status.real_curated_ready,
+        "data_authenticity": authenticity,
         "quality_report_ready": quality_report.exists(),
         "counts": {
             "admission_records": len(repo.dataset.admission_records),
@@ -121,7 +126,11 @@ def hubei_data_promote() -> dict[str, object]:
 
 @app.post("/api/hubei/data/seed")
 def hubei_data_seed() -> dict[str, object]:
-    return seed_db(curated_dir=ROOT / "data" / "curated" / "hubei")
+    repo.reload()
+    try:
+        return seed_db(curated_dir=ROOT / "data" / "curated" / "hubei")
+    finally:
+        repo.reload()
 
 
 @app.get("/api/hubei/ocr-review-queue")
@@ -189,6 +198,17 @@ def admission_plans() -> list[dict[str, object]]:
 
 @app.post("/api/recommendations/run")
 def run_recommendations(request: RecommendationRequest) -> dict[str, object]:
+    try:
+        require_runtime_dataset(repo.dataset_status)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "real_data_required",
+                "message": str(exc),
+                "data_status": repo.dataset_status.to_dict(),
+            },
+        ) from exc
     candidate = CandidateProfile(
         year=request.year,
         province=request.province,
@@ -210,7 +230,15 @@ def run_recommendations(request: RecommendationRequest) -> dict[str, object]:
     )
     items = model.recommend(candidate, repo.dataset.admission_records, repo.dataset.admission_plans, refs)
     run = plan_builder.build(run_id=str(uuid4()), candidate=candidate, items=items)
+    run.data_status = repo.dataset_status.to_dict()
     advice_result = advice.explain(run)
+    run.llm_status = {
+        "request_id": advice_result.request_id,
+        "model": advice_result.model,
+        "endpoint_style": advice_result.endpoint_style,
+        "latency_ms": advice_result.latency_ms,
+        "error_code": advice_result.error_code,
+    }
     LLM_LOGS.append(advice_result.__dict__)
     RUNS[run.run_id] = run
     TRACES[run.run_id] = _build_trace(candidate, repo.dataset, run)
@@ -299,6 +327,58 @@ def llm_advice(run_id: str) -> dict[str, object]:
     LLM_LOGS.append(result.__dict__)
     return result.output_json
 
+
+
+def _doctor_peak_status() -> dict[str, object]:
+    skill_path = ROOT / ".agents" / "skills" / "doctor-peak" / "SKILL.md"
+    latest = LLM_LOGS[-1] if LLM_LOGS else None
+    return {
+        "doctor_peak": {
+            "status": "available" if skill_path.exists() else "missing",
+            "path": str(skill_path),
+            "policy": "explanation_only_no_ranking_changes",
+        },
+        "minimax": MiniMaxClient().status(),
+        "latest_call": {
+            "request_id": latest.get("request_id") if latest else None,
+            "error_code": latest.get("error_code") if latest else None,
+            "latency_ms": latest.get("latency_ms") if latest else None,
+            "endpoint_style": latest.get("endpoint_style") if latest else None,
+        },
+    }
+
+
+@app.get("/api/admin/doctor-peak/status")
+def doctor_peak_status() -> dict[str, object]:
+    return _doctor_peak_status()
+
+
+@app.post("/api/admin/doctor-peak/test")
+def doctor_peak_test() -> dict[str, object]:
+    payload = {
+        "province": "Hubei",
+        "year": 2026,
+        "first_subject": "physics",
+        "score_band": "600-630",
+        "rank_band": "10000-15000",
+        "items": [
+            {
+                "major_group_code": "probe-group",
+                "tier": "stable",
+                "rank_gap": 1200,
+                "warnings": ["probe_payload_no_personal_data"],
+            }
+        ],
+    }
+    result = MiniMaxClient().generate_advice(payload)
+    LLM_LOGS.append(result.__dict__)
+    return {
+        "status": "fallback" if result.error_code else "ok",
+        "error_code": result.error_code,
+        "request_id": result.request_id,
+        "output": result.output_json,
+        "minimax": MiniMaxClient().status(),
+    }
 
 @app.get("/api/admin/raw-documents")
 def raw_documents() -> list[dict[str, object]]:
@@ -427,6 +507,8 @@ def _run_hubei_data_build(
         quality=quality,
         promote=promote,
     )
+    if download or parse or quality or promote:
+        repo.reload()
     return {"status": "ok", **result.to_dict()}
 
 
@@ -499,6 +581,7 @@ def _build_trace(
             "final_plan": len(run.items),
         },
         "tier_counts": run.tier_counts,
+        "data_authenticity": repo.dataset_status.to_dict(),
         "data_quality": {
             "plan_status": "ready" if dataset.admission_plans else "missing_current_plan",
             "admission_records": len(dataset.admission_records),

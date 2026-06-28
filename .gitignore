@@ -44,3 +44,4 @@ data/candidate/hubei/plans/*
 test-results/
 playwright-report/
 *.tsbuildinfo
+.pytest_tmp/

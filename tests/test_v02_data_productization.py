@@ -79,6 +79,31 @@ def test_production_mode_rejects_fixture_curated_data(tmp_path: Path, monkeypatc
         load_curated_dataset(tmp_path / "data" / "curated" / "hubei")
 
 
+def test_repository_uses_empty_dataset_for_fixture_curated_data_in_production(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from apps.api.app.repository import Repository
+    from services.data.hubei.build_dataset import build_dataset
+
+    build_dataset(
+        root=ROOT,
+        output_root=tmp_path,
+        download=False,
+        parse=True,
+        quality=True,
+        promote=True,
+    )
+    monkeypatch.setenv("APP_ENV", "production")
+
+    repository = Repository(tmp_path)
+
+    assert repository.dataset_status.curated_ready is True
+    assert repository.dataset_status.real_curated_ready is False
+    assert repository.dataset.admission_records == []
+    assert repository.dataset.admission_plans == []
+    assert repository.dataset.rank_segments == []
+
+
 def test_recommendation_trace_and_csv_export(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
     client = TestClient(app)
@@ -165,3 +190,104 @@ def test_local_dev_cors_allows_web_port_3001() -> None:
 
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:3001"
+
+
+def _write_curated_csv(path: Path, rows: list[dict[str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8-sig", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def test_production_mode_rejects_fixture_marker_in_rank_segments_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from services.data.hubei.curated_loader import load_curated_dataset
+
+    curated = tmp_path / "data" / "curated" / "hubei"
+    _write_curated_csv(
+        curated / "admission_records_2023_2025.csv",
+        [
+            {
+                "year": "2025",
+                "province": "Hubei",
+                "batch": "undergraduate",
+                "category": "general",
+                "first_subject": "physics",
+                "second_subject_requirement": "none",
+                "university_code": "HBU001",
+                "university_name": "Hubei Real University",
+                "major_group_code": "HBU001-P01",
+                "major_group_name": "Physics Group",
+                "admission_category": "general",
+                "min_score": "610",
+                "min_rank": "23950",
+                "plan_seats": "12",
+                "source_id": "official-line-2025",
+                "source_url": "https://example.edu/official-line",
+                "confidence_score": "0.95",
+                "parse_confidence": "0.95",
+                "parser_version": "curated-v0.2",
+                "review_status": "approved",
+            }
+        ],
+    )
+    _write_curated_csv(
+        curated / "admission_plans_2026.csv",
+        [
+            {
+                "year": "2026",
+                "province": "Hubei",
+                "batch": "undergraduate",
+                "category": "general",
+                "first_subject": "physics",
+                "second_subject_requirement": "none",
+                "university_code": "HBU001",
+                "university_name": "Hubei Real University",
+                "major_group_code": "HBU001-P01",
+                "major_group_name": "Physics Group",
+                "major_code": "080901",
+                "major_name": "Computer Science",
+                "plan_seats": "20",
+                "tuition": "5000",
+                "schooling_years": "4",
+                "campus": "Main",
+                "is_sino_foreign": "false",
+                "is_private": "false",
+                "notes": "",
+                "physical_limit_note": "",
+                "single_subject_limit_note": "",
+                "source_id": "official-plan-2026",
+                "source_url": "https://example.edu/official-plan",
+                "confidence_score": "0.95",
+                "parse_confidence": "0.95",
+                "review_status": "approved",
+            }
+        ],
+    )
+    _write_curated_csv(
+        curated / "rank_segments_2023_2026.csv",
+        [
+            {
+                "year": "2026",
+                "province": "Hubei",
+                "category": "general",
+                "first_subject": "physics",
+                "score": "610",
+                "same_score_count": "500",
+                "cumulative_rank": "24000",
+                "rank_start": "23501",
+                "rank_end": "24000",
+                "source_id": "official-rank-2026",
+                "source_url": "manual-upload://fixture-rank",
+                "confidence_score": "0.95",
+                "parse_confidence": "0.95",
+                "review_status": "approved",
+            }
+        ],
+    )
+    monkeypatch.setenv("APP_ENV", "production")
+
+    with pytest.raises(ValueError, match="fixture"):
+        load_curated_dataset(curated)
