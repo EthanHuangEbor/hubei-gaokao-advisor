@@ -156,6 +156,8 @@ def require_runtime_dataset(
 ) -> DatasetAuthenticity:
     authenticity = inspect_curated_dir(status) if isinstance(status, (str, Path)) else status
     env = app_env or os.getenv("APP_ENV", "development")
+    if env is None:
+        env = "development"
     allow_fixture = fixture_data_allowed() if allow_fixture_data is None else allow_fixture_data
     strict = strict_real_data_required() or env.strip().lower() == "production"
     if authenticity.real_curated_ready:

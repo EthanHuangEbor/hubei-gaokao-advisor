@@ -88,7 +88,7 @@ def _candidate_fieldnames(directory: Path) -> list[str]:
         with path.open(encoding="utf-8-sig", newline="") as file:
             fieldnames = csv.DictReader(file).fieldnames
         if fieldnames:
-            return fieldnames
+            return list(fieldnames)
     return []
 
 

@@ -4,6 +4,7 @@ import csv
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
@@ -85,7 +86,7 @@ def _read_url(url: str) -> bytes:
     if not _is_allowed_download_url(url):
         raise ValueError(f"download URL is not an allowed official Hubei HTTP(S) source: {url}")
     with urlopen(url) as response:  # noqa: S310 - URL is validated against official HTTP(S) allowlist.
-        return response.read()
+        return cast(bytes, response.read())
 
 
 def _download_filename(source: HubeiSource) -> str:
